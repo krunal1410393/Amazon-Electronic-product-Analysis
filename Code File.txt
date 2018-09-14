@@ -1,0 +1,96 @@
+BD project:
+
+
+ (1)---------------------
+ CREATE TABLE amazon_reviews(reviewerIDstring, asinstring, reviewerNamestring, helpful array<int>, reviewTextstring, overall float, summary string, unixReviewTimeint, reviewTimestring)ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe’ STORED AS TEXTFILE;
+ LOAD DATA LOCAL INPATH 'data/Reviews/Electronics_5.json' OVERWRITE INTO TABLE amazon_reviews;
+
+ CREATE TABLE reviews (reviewerIDstring, asinstring, reviewerNamestring, helpful array<int>, reviewTextstring, overall float, summary string, unixReviewTimeint, reviewTimestring) PARTITIONED BY (reviewYearint) CLUSTERED BY (overall) INTO 5 BUCKETS ROW FORMAT DELIMITED FIELDS TERMINATED BY ',';
+ INSERT INTO TABLE reviews PARTITION(reviewYear) SELECT reviewerID,asin,reviewerName,helpful,reviewText,overall,summary,unixReviewTime,reviewTime,year(from_unixtime(unix_timestamp(reviewTime, 'MM dd, yyyy'))) FROM amazon_reviews;
+
+ (1.1)
+ CREATE TABLE amazon_ratings(user string, item string, rating float, timestamp int ) ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' STORED AS TEXTFILE;
+ LOAD DATA LOCAL INPATH 'data/Ratings/ratings_Electronics.csv' OVERWRITE INTO TABLE amazon_ratings;
+
+ CREATE TABLE ratings (user string, item string, rating float, timestamp int ) PARTITIONED BY (ratingYearint) CLUSTERED BY (rating) INTO 5 BUCKETS ROW FORMAT DELIMITED FIELDS TERMINATED BY ',';
+ INSERT INTO TABLE ratings PARTITION(ratingYear) SELECT user,item,rating,timestamp,year(date_add(from_unixtime(timestamp),1)) FROM amazon_ratings;
+ 
+
+ (2)-----------------------------------------
+  SELECT r.ratingYear,r.item,r.review_count
+
+ FROM  (SELECT rt.ratingYear,rt.item,rt.review_count,ROW_NUMBER() OVER(PARTITION BY rt.ratingYearORDER BY rt.review_countDESC) AS item_rank
+
+ FROM (SELECT rat.ratingYear,rat.item,AVG(rat.rating) AS avg_rating,COUNT(rev.reviewerID) AS review_count
+
+ FROM (SELECT reviewYear,asin,reviewerIDFROM reviews WHERE reviewYear>= 2006 AND reviewYear<= 2014) rev
+
+ LEFT OUTER JOIN (SELECT ratingYear,item,user,ratingFROM ratings WHERE ratingYear>= 2006 AND ratingYear<= 2014) rat
+ ON rev.asin= rat.itemAND rev.reviewerID= rat.user GROUP BY rat.ratingYear,rat.item)
+ WHERE avg_rating> CAST(3.0 AS FLOAT) ) 
+ WHERE r.item_rank= 1;
+ 
+ 
+ 
+ (3)------------------------------------------
+  SELECT r.ratingYear,r.item,r.review_count
+
+ FROM  (SELECT rt.ratingYear,rt.item,rt.review_count,ROW_NUMBER() OVER(PARTITION BY rt.ratingYearORDER BY rt.review_countASC) AS item_rank
+
+ FROM (SELECT rat.ratingYear,rat.item,AVG(rat.rating) AS avg_rating,COUNT(rev.reviewerID) AS review_count
+
+ FROM (SELECT reviewYear,asin,reviewerIDFROM reviews WHERE reviewYear>= 2006 AND reviewYear<= 2014) rev
+
+ RIGHT OUTER JOIN (SELECT ratingYear,item,user,ratingFROM ratings WHERE ratingYear>= 2006 AND ratingYear<= 2014) rat
+ ON rev.asin= rat.itemAND rev.reviewerID= rat.user
+ GROUP BY rat.ratingYear,rat.item) rt
+ WHERE avg_rating< CAST(2.0 AS FLOAT) ) r
+ WHERE r.item_rank= 1;
+ 
+ 
+
+ (4)------------------------------------------------------
+ SELECT rev.reviewYear,rev.reviewerID,COUNT(rev.reviewerID) AS review_count
+FROM reviews rev
+RIGHT OUTER JOIN ratings rat
+ON rev.asin= rat.itemAND rev.reviewerID= rat.user
+GROUP BY rev.reviewYear,rev.reviewerID
+ORDER BY review_countDESC LIMIT 1;
+
+
+
+(5)------------------------------------------------------
+SELECT r.ratingYear,r.item,r.avg_helpful_perc
+FROM  (SELECT rt.ratingYear,rt.item,rt.avg_helpful_perc,ROW_NUMBER() OVER(PARTITION BY rt.ratingYearORDER BY rt.avg_helpful_percASC) AS helpful_perc_rank
+FROM (SELECT rat.ratingYear,rat.item,AVG((helpful[0] / helpful[1]) * 100) AS avg_helpful_perc
+FROM reviews rev
+RIGHT OUTER JOIN ratings rat
+ON rev.asin= rat.itemAND rev.reviewerID= rat.user
+GROUP BY rat.ratingYear,rat.item) rt
+WHERE rt.avg_helpful_perc>= CAST(1.0 AS FLOAT) AND avg_helpful_perc<= CAST(30.0 AS FLOAT) ) r
+WHERE r.helpful_perc_rank= 1;
+
+
+(6)-------------------------------------------------
+ SELECT r.ratingYear,r.item,r.avg_helpful_perc
+FROM  (SELECT rt.ratingYear,rt.item,rt.avg_helpful_perc,ROW_NUMBER() OVER(PARTITION BY rt.ratingYearORDER BY rt.avg_helpful_percDESC) AS helpful_perc_rank
+FROM (SELECT rat.ratingYear,rat.item,AVG((helpful[0] / helpful[1]) * 100) AS avg_helpful_perc
+FROM reviews rev
+RIGHT OUTER JOIN ratings rat
+ON rev.asin= rat.itemAND rev.reviewerID= rat.user
+GROUP BY rat.ratingYear,rat.item) rt
+WHERE rt.avg_helpful_perc> CAST(75.0 AS FLOAT) ) r
+WHERE r.helpful_perc_rank= 1;
+
+
+
+(7)----------------------------------------------------
+ SELECT r.asin,collect_list(r.year_count_map) AS Year_count
+FROM  (SELECT rev.asin,map(rev.reviewYear,COUNT(rev.reviewerID)) AS year_count_map
+FROM reviews rev
+GROUP BY rev.reviewYear,rev.asin) r
+GROUP BY r.asin;
+
+
+
+
